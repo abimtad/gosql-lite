@@ -4,28 +4,47 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestDatabase_ExecuteInsert(t *testing.T) {
+func TestTable_Insert(t *testing.T) {
 	t.Parallel()
 
-	aDatabase, err := NewDatabase("db")
+	ctx := context.Background()
+
+	aDatabase, err := NewDatabase("db", nil)
 	require.NoError(t, err)
+
+	aRow := gen.Row()
 
 	insertStmt := Statement{
 		Kind:      Insert,
 		TableName: "foo",
 		Fields:    []string{"id", "email", "age"},
-		Inserts:   [][]any{{gen.Int64(), gen.Email(), int32(gen.IntRange(18, 100))}},
+		Inserts:   [][]any{aRow.Values},
 	}
 
-	_, err = aDatabase.executeInsert(context.Background(), insertStmt)
-	require.Error(t, errTableDoesNotExist)
-
-	_, err = aDatabase.CreateTable(context.Background(), "foo", testColumns)
+	aTable, err := aDatabase.CreateTable(ctx, "foo", testColumns)
 	require.NoError(t, err)
 
-	_, err = aDatabase.executeInsert(context.Background(), insertStmt)
+	aResult, err := aTable.Insert(ctx, insertStmt)
 	require.NoError(t, err)
+	assert.Equal(t, 1, aResult.RowsAffected)
+
+	selectStmt := Statement{
+		Kind:      Select,
+		TableName: "foo",
+		Fields:    []string{"id", "email", "age"},
+	}
+	aResult, err = aTable.Select(ctx, selectStmt)
+	require.NoError(t, err)
+
+	selectRow, err := aResult.Rows(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, aRow, selectRow)
+
+	_, err = aResult.Rows(ctx)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoMoreRows)
 }
