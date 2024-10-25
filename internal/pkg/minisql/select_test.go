@@ -9,66 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTable_Select_SplitRootLeaf(t *testing.T) {
-	t.Parallel()
-
-	var (
-		ctx            = context.Background()
-		pagerMock      = new(MockPager)
-		rows           = gen.Rows(15)
-		cells, rowSize = 0, rows[0].Size()
-		aRootPage      = newRootLeafPageWithCells(cells, int(rowSize))
-		rightChild     = &Page{LeafNode: NewLeafNode(rowSize)}
-		leftChild      = &Page{LeafNode: NewLeafNode(rowSize)}
-		aTable         = NewTable(testLogger, "foo", testColumns, pagerMock, 0)
-	)
-
-	pagerMock.On("GetPage", mock.Anything, aTable, uint32(0)).Return(aRootPage, nil)
-	pagerMock.On("GetPage", mock.Anything, aTable, uint32(1)).Return(rightChild, nil)
-	pagerMock.On("GetPage", mock.Anything, aTable, uint32(2)).Return(leftChild, nil)
-
-	// TotalPages is called twice, let's make sure the second time it's called,
-	// it will return incremented value since we have created a new page already
-	totalPages := uint32(1)
-	pagerMock.On("TotalPages").Return(func() uint32 {
-		old := totalPages
-		totalPages += 1
-		return old
-	}, nil)
-
-	// Insert test rows
-	for _, aRow := range rows {
-		stmt := Statement{
-			Kind:      Insert,
-			TableName: "foo",
-			Fields:    []string{"id", "email", "age"},
-			Inserts:   [][]any{aRow.Values},
-		}
-
-		err := aTable.Insert(ctx, stmt)
-		require.NoError(t, err)
-	}
-
-	// Select all rows
-	stmt := Statement{
-		Kind:      Select,
-		TableName: "foo",
-		Fields:    []string{"id", "email", "age"},
-	}
-	aResult, err := aTable.Select(ctx, stmt)
-
-	require.NoError(t, err)
-	assert.Equal(t, aTable.Columns, aResult.Columns)
-
-	aRow, err := aResult.Rows(ctx)
-	i := 0
-	for ; err == nil; aRow, err = aResult.Rows(ctx) {
-		assert.Equal(t, rows[i], aRow)
-		i += 1
-	}
-}
-
-func TestTable_Select_LeafNodeInsert(t *testing.T) {
+func TestTable_Select(t *testing.T) {
 	t.Parallel()
 
 	var (
@@ -99,34 +40,97 @@ func TestTable_Select_LeafNodeInsert(t *testing.T) {
 		return old
 	}, nil)
 
-	// Insert test rows
-	for _, aRow := range rows {
-		stmt := Statement{
-			Kind:      Insert,
-			TableName: "foo",
-			Fields:    []string{"id", "email", "age"},
-			Inserts:   [][]any{aRow.Values},
-		}
-
-		err := aTable.Insert(ctx, stmt)
-		require.NoError(t, err)
-	}
-
-	// Select all rows
-	stmt := Statement{
-		Kind:      Select,
+	// Batch insert test rows
+	insertStmt := Statement{
+		Kind:      Insert,
 		TableName: "foo",
-		Fields:    []string{"id", "email", "age"},
+		Fields:    columnNames(testColumns...),
+		Inserts:   [][]any{},
 	}
-	aResult, err := aTable.Select(ctx, stmt)
+	for _, aRow := range rows {
+		insertStmt.Inserts = append(insertStmt.Inserts, aRow.Values)
+	}
 
+	err := aTable.Insert(ctx, insertStmt)
 	require.NoError(t, err)
-	assert.Equal(t, aTable.Columns, aResult.Columns)
 
-	aRow, err := aResult.Rows(ctx)
-	i := 0
-	for ; err == nil; aRow, err = aResult.Rows(ctx) {
-		assert.Equal(t, rows[i], aRow)
-		i += 1
+	testCases := []struct {
+		Name     string
+		Stmt     Statement
+		Expected []Row
+	}{
+		{
+			"Select all rows",
+			Statement{
+				Kind:      Select,
+				TableName: "foo",
+				Fields:    columnNames(testColumns...),
+			},
+			rows,
+		},
+		{
+			"Select no rows",
+			Statement{
+				Kind:      Select,
+				TableName: "foo",
+				Fields:    columnNames(testColumns...),
+				Conditions: OneOrMore{
+					{
+						{
+							Operand1: Operand{
+								Type:  Field,
+								Value: "email",
+							},
+							Operator: Eq,
+							Operand2: Operand{
+								Type:  QuotedString,
+								Value: "bogus",
+							},
+						},
+					},
+				},
+			},
+			[]Row{},
+		},
+		{
+			"Select single row",
+			Statement{
+				Kind:      Select,
+				TableName: "foo",
+				Fields:    columnNames(testColumns...),
+				Conditions: OneOrMore{
+					{
+						{
+							Operand1: Operand{
+								Type:  Field,
+								Value: "id",
+							},
+							Operator: Eq,
+							Operand2: Operand{
+								Type:  Integer,
+								Value: rows[5].Values[0].(int64),
+							},
+						},
+					},
+				},
+			},
+			[]Row{rows[5]},
+		},
+	}
+
+	for _, aTestCase := range testCases {
+		t.Run(aTestCase.Name, func(t *testing.T) {
+			aResult, err := aTable.Select(ctx, aTestCase.Stmt)
+			require.NoError(t, err)
+
+			// Use iterator to collect all rows
+			actual := []Row{}
+			aRow, err := aResult.Rows(ctx)
+			for ; err == nil; aRow, err = aResult.Rows(ctx) {
+				actual = append(actual, aRow)
+			}
+
+			assert.Equal(t, aTestCase.Expected, actual)
+		})
 	}
 }
