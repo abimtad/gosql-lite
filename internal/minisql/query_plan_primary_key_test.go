@@ -6,21 +6,16 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestTable_PlanQuery_PrimaryKey(t *testing.T) {
 	t.Parallel()
 
-	indexName := "pkey__users"
-	aTable := &Table{
-		PrimaryKey: PrimaryKey{
-			IndexInfo: IndexInfo{
-				Name:   indexName,
-				Column: testColumnsWithPrimaryKey[0],
-			},
-		},
-		Columns: testColumnsWithPrimaryKey,
-	}
+	var (
+		indexName = "pkey__users"
+		aTable    = NewTable(zap.NewNop(), nil, nil, "users", testColumnsWithPrimaryKey, 0)
+	)
 
 	testCases := []struct {
 		Name     string
